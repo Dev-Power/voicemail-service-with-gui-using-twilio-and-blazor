@@ -398,3 +398,4 @@ FodyWeavers.xsd
 *.sln.iml
 .DS_Store
 src/VoicemailDirectory.WebApi/wwwroot/Voicemails/*.mp3
+src/.idea/*
