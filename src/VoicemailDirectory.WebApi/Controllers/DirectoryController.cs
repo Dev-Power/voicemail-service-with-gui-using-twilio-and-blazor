@@ -1,7 +1,9 @@
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc;
 using Twilio.AspNet.Core;
 using Twilio.TwiML;
 using Twilio.TwiML.Voice;
+using VoicemailDirectory.WebApi.Data;
 using VoicemailDirectory.WebApi.Services;
 
 namespace VoicemailDirectory.WebApi.Controllers;
@@ -12,21 +14,25 @@ public class DirectoryController : TwilioController
 {
     private readonly ILogger<DirectoryController> _logger;
     private readonly FileService _fileService;
-
+    private readonly IRecordingRepository _recordingRepository;
+    
     public DirectoryController(
         ILogger<DirectoryController> logger,
-        FileService fileService
+        FileService fileService,
+        IRecordingRepository recordingRepository
     )
     {
         _logger = logger;
         _fileService = fileService;
+        _recordingRepository = recordingRepository;
     }
 
     [HttpPost]
     public TwiMLResult Index()
     {
-        var newMessages = _fileService.GetRecordingSids(Constants.New);
-        var savedMessages = _fileService.GetRecordingSids(Constants.Saved);
+        var allRecordings = _recordingRepository.GetAll();
+        var newMessages = allRecordings.Where(rec => rec.Status == RecordingStatus.New).ToList();
+        var savedMessages = allRecordings.Where(rec => rec.Status == RecordingStatus.Saved).ToList();
 
         var response = new VoiceResponse();
 
@@ -48,12 +54,12 @@ public class DirectoryController : TwilioController
         string recordingType = newMessages.Count > 0 ? Constants.New : Constants.Saved;
         response.Say($"Playing {recordingType} messages.");
 
-        // No filter to get all recordings. Order alphabetically so that the new ones come at top
-        // Can prepend datetime as well to order more precisely
-        var allMessages = _fileService.GetRecordingSids(string.Empty)
-            .OrderBy(s => s)
+        var allMessages = allRecordings
+            .OrderBy(rec => rec.Status) // So the new ones come on top
+            .ThenByDescending(rec => rec.Date) // Descending so that the newest ones come on top
+            .Select(rec => rec.RecordingSID)
             .ToList();
-
+        
         response.Append(
             CreateGatherTwiml(allMessages)
                 .Append(PlayNextMessage(allMessages))
@@ -64,7 +70,7 @@ public class DirectoryController : TwilioController
     }
 
     [HttpPost]
-    public TwiMLResult Gather(
+    public async Task<TwiMLResult> Gather(
         [FromQuery] List<string> queuedMessages,
         [FromForm] int digits
     )
@@ -86,12 +92,13 @@ public class DirectoryController : TwilioController
                 break;
 
             case 2: // Save
-                _fileService.SaveRecording(currentMessage);
+                await _recordingRepository.ChangeStatusToSaved(currentMessage);
                 queuedMessages.Remove(currentMessage);
                 break;
 
             case 3: // Delete
                 _fileService.DeleteRecording(currentMessage);
+                await _recordingRepository.Delete(currentMessage);
                 queuedMessages.Remove(currentMessage);
                 break;
 
